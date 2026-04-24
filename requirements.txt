@@ -1,0 +1,4 @@
+paramiko
+pyTelegramBotAPI
+google-genai
+schedule

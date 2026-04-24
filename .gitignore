@@ -1,0 +1,10 @@
+# Ignorar arquivos de senhas e configurações reais
+servidores.json
+
+# Ignorar logs
+monitor_infra.log
+monitor_infra.log.*
+
+# Ignorar arquivos temporários do Python
+__pycache__/
+*.pyc

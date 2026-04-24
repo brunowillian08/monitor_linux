@@ -1,0 +1,39 @@
+{
+    "config_ia": {
+    "gemini_api_key": "SUA_CHAVE_GEMINI_aQUI"
+  },
+    "config_email": {
+    "servidor_smtp": "SERVIDOR_SMTP",
+    "porta_smtp": 465,
+    "remetente": "EMAIL@EMAIL",
+    "usuario": "EMAIL@EMAIL",
+    "senha": "EMAIL@EMAIL",
+    "destinatarios": [
+      "EMAIL@EMAIL"
+    ]
+  },
+   "config_telegram": {
+    "token": "TOKEN_TELEGRAM",
+    "chat_id": "ID_CHAT"
+  },
+  "servidores": [
+    {
+        "apelido": "NOME SERVIDOR",
+        "host": "192.168.0.1",
+        "usuario": "",
+        "senha": "",
+        "porta": 22,
+        "particao": "/",
+        "limite_percentual": 80
+    },
+    {
+        "apelido": "NOME SERVIDOR",
+        "host": "192.168.0.1",
+        "usuario": "",
+        "senha": "",
+        "porta": 2234,
+        "particao": "/",
+        "limite_percentual": 80
+    }	
+  ]
+}
