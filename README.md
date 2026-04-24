@@ -23,17 +23,21 @@ O bot possui uma interface de botões para você não precisar digitar nomes de 
 
 1. Clone o repositório ou copie os arquivos para o servidor (ex: `/opt/monitor_infra`).
 2. Instale as dependências necessárias do Python:
-   ```bash
-   pip install paramiko pyTelegramBotAPI google-genai schedule
+```bash
+pip install paramiko pyTelegramBotAPI google-genai schedule
+```
+
 3. Crie o arquivo `servidores.json` na raiz da pasta usando o modelo `servidores.exemplo.json` (adicione seus tokens, senhas e chaves de API).
 
 ## ⚙️ Executando como Serviço (Systemd)
 
 Para garantir que o script rode 24/7 de forma imortal no Linux, crie o arquivo de serviço:
 
-   ```bash
-   nano /etc/systemd/system/monitor-linux.service
+```bash
+nano /etc/systemd/system/monitor-linux.service
+```
 Cole a configuração abaixo:
+```bash
 [Unit]
 Description=Monitor de Infraestrutura do Bruno
 After=network.target
@@ -47,9 +51,11 @@ Restart=always
 
 [Install]
 WantedBy=multi-user.target
-
+```
 Ative e inicie o serviço com os comandos:
-   systemctl daemon-reload
-   systemctl enable monitor-linux.service
-   systemctl start monitor-linux.service
-   systemctl status monitor-linux.service
+```bash
+systemctl daemon-reload
+systemctl enable monitor-linux.service
+systemctl start monitor-linux.service
+systemctl status monitor-linux.service
+```
