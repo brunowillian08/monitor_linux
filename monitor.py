@@ -19,7 +19,6 @@ from logging.handlers import TimedRotatingFileHandler
 # ==============================================================================
 
 # Configura o sistema para salvar um arquivo de texto com tudo o que acontece.
-# O 'backupCount=1' significa que ele guarda o log de hoje e o de ontem. O resto ele apaga sozinho para poupar disco.
 rotacionador_log = TimedRotatingFileHandler(
     filename="monitor_infra.log", 
     when="midnight", 
@@ -55,8 +54,18 @@ config_global = carregar_configuracao()
 
 # Extrai as chaves secretas do JSON carregado
 TOKEN = config_global.get('config_telegram', {}).get('token')
-CHAT_ID = config_global.get('config_telegram', {}).get('chat_id')
 GEMINI_KEY = config_global.get('config_ia', {}).get('gemini_api_key')
+
+# ==============================================================================
+# NOVIDADE: Trata múltiplos IDs de forma segura
+# ==============================================================================
+_raw_chat_id = config_global.get('config_telegram', {}).get('chat_id', [])
+# Se por acaso no JSON não for uma lista, transforma em lista. Converte tudo para texto.
+if isinstance(_raw_chat_id, list):
+    CHAT_IDS = [str(x) for x in _raw_chat_id]
+else:
+    CHAT_IDS = [str(_raw_chat_id)]
+
 
 # Liga os motores do Telegram e da Inteligência Artificial
 bot = telebot.TeleBot(TOKEN) if TOKEN else None
@@ -66,6 +75,15 @@ cliente_ia = genai.Client(api_key=GEMINI_KEY) if GEMINI_KEY else None
 # ==============================================================================
 # CAPÍTULO 2: FUNÇÕES DE APOIO E CONEXÃO (As ferramentas pesadas)
 # ==============================================================================
+
+def enviar_alerta_geral(mensagem, parse_mode=None):
+    """Envia uma mensagem automática para TODOS os administradores cadastrados."""
+    if not bot: return
+    for chat_id in CHAT_IDS:
+        try:
+            bot.send_message(chat_id, mensagem, parse_mode=parse_mode)
+        except Exception as e:
+            logging.error(f"Erro ao enviar alerta para {chat_id}: {e}")
 
 def gerar_teclado_servidores():
     """Lê a lista de servidores do JSON e transforma cada 'apelido' em um botão clicável no Telegram."""
@@ -127,67 +145,103 @@ def verificar_disco(servidor):
 # ==============================================================================
 # CAPÍTULO 3: COMANDOS DO TELEGRAM (A interface que você conversa)
 # ==============================================================================
-# NOTA DE SEGURANÇA: A primeira linha de todo comando verifica o CHAT_ID. 
-# Se for um estranho mandando mensagem, o 'return' encerra a função imediatamente.
+# A segurança agora verifica se o ID de quem chamou está dentro da lista CHAT_IDS
+
+@bot.message_handler(commands=['start', 'id'])
+def cmd_start(m):
+    # Essa função é a "recepcionista". Ela atende quem clica em Começar.
+    print(f"🚨 NOVO USUÁRIO! Nome: {m.from_user.first_name} | ID CAPTURADO: {m.chat.id}")
+    
+    # Se o ID já estiver na lista, dá as boas vindas normais
+    if str(m.chat.id) in CHAT_IDS:
+        bot.reply_to(m, "Olá, Administrador! O sistema está operante. Use /status para checar a rede.")
+    else:
+        # Se for um desconhecido (como seu amigo agora), avisa o ID dele na tela do celular
+        bot.reply_to(m, f"Olá, {m.from_user.first_name}! Você não tem acesso ao painel.\nSeu ID de autorização é: {m.chat.id}")
+
 
 @bot.message_handler(commands=['json'])
 def cmd_json(m):
-    if str(m.chat.id) != str(CHAT_ID): return
+    if str(m.chat.id) not in CHAT_IDS: return
     bot.reply_to(m, "🔎 Lendo arquivos JSON em todos os servidores...")
-    # Dispara a função em segundo plano para o bot não ficar travado
     threading.Thread(target=rotina_diaria_bancos).start()
 
 @bot.message_handler(commands=['status'])
 def cmd_status(m):
-    if str(m.chat.id) != str(CHAT_ID): return
+    print(f"ID CAPTURADO: {m.chat.id}")
+    if str(m.chat.id) not in CHAT_IDS: return
+    
     bot.reply_to(m, "🔎 Verificando servidores...")
-    # Roda a função de disco em todos os servidores e junta o resultado
     resumos = [verificar_disco(s) or f"✅ {s['apelido']}: OK" for s in config_global.get('servidores', [])]
-    bot.send_message(CHAT_ID, "\n".join(resumos), parse_mode="Markdown")
+    
+    # Responde apenas para quem pediu o comando
+    bot.send_message(m.chat.id, "\n".join(resumos), parse_mode="Markdown")
 
 @bot.message_handler(commands=['analisar'])
 def cmd_analisar(m):
-    if str(m.chat.id) != str(CHAT_ID): return
-    # Exibe os botões na tela e manda o código esperar a próxima mensagem (o clique no botão)
+    if str(m.chat.id) not in CHAT_IDS: return
     msg = bot.reply_to(m, "Selecione o servidor para analisar arquivos grandes:", reply_markup=gerar_teclado_servidores())
     bot.register_next_step_handler(msg, processar_analise_ia)
 
 def processar_analise_ia(message):
-    """Recebe o clique do botão do /analisar, roda o comando 'du -ah' e manda pra IA ler."""
+    """Recebe o clique do botão do /analisar, roda o comando 'du -ah' otimizado e manda pra IA ler."""
     apelido = message.text
     servidor = next((s for s in config_global.get('servidores', []) if s['apelido'] == apelido), None)
     
     if not servidor:
-        bot.send_message(CHAT_ID, "❌ Servidor não encontrado.")
+        bot.send_message(message.chat.id, "❌ Servidor não encontrado.")
         return
 
-    # Remove os botões da tela
-    bot.send_message(CHAT_ID, f"🧠 Analisando `{apelido}`... aguarde.", parse_mode="Markdown", reply_markup=types.ReplyKeyboardRemove())
+    bot.send_message(message.chat.id, f"🧠 Analisando `{apelido}`... aguarde.", parse_mode="Markdown", reply_markup=types.ReplyKeyboardRemove())
     
     try:
         ssh = paramiko.SSHClient()
         ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         ssh.connect(hostname=servidor['host'], username=servidor['usuario'], password=servidor['senha'], port=servidor.get('porta', 22), timeout=20)
         
-        # Puxa do JSON pastas que não devem ser varridas (ex: pasta do banco de dados)
+        # PEGA AS PASTAS PARA IGNORAR DO JSON
         pastas_ignorar = servidor.get('ignorar_pastas', [])
-        str_exclude = " ".join([f"--exclude={p}" for p in pastas_ignorar])
         
-        cmd = f"du -ah {str_exclude} {servidor['particao']} 2>/dev/null | sort -rh | head -n 20"
+        # Adiciona a pasta /bkp à lista de ignorados do Linux
+        pastas_ignorar.append("*/bkp*")
+        
+        # Cria a string de exclusão. 
+        # Mantemos o bloqueio aos '.fdb' para proteger o banco quente, mas LIBERAMOS os '.fbk'!
+        str_exclude = " ".join([f"--exclude={p}" for p in pastas_ignorar])
+        str_exclude += " --exclude='*.fdb'" 
+        
+        # REDUÇÃO DE INPUT: head -n 10
+        cmd = f"du -ah {str_exclude} {servidor['particao']} 2>/dev/null | sort -rh | head -n 10"
         _, stdout, _ = ssh.exec_command(cmd)
         saida_du = stdout.read().decode('utf-8').strip()
         ssh.close()
 
-        prompt = f"O disco de {apelido} está cheio. Analise o du -ah e dê 2 comandos de limpeza: {saida_du}"
+        # Se a saída estiver vazia, nem gasta token chamando a IA
+        if not saida_du:
+            bot.send_message(message.chat.id, "Nenhum arquivo grande encontrado ou falta de permissão.", parse_mode="Markdown")
+            return
+
+        # 3. PROMPT ESTRITO: Força a IA a gastar poucos tokens na resposta
+        prompt = f"""
+        Analise esta lista de arquivos pesados de um servidor Linux:
+        {saida_du}
+        
+        Regras de resposta (Seja extremamente curto):
+        1. Diga qual é o maior ofensor de espaço em 1 frase curta.
+        2. Dê apenas 1 comando `rm -f` no formato de bloco de código para limpar arquivos de log ou temporários seguros.
+        3. ZERO texto de introdução ou conclusão. Vá direto ao ponto.
+        """
+        
         resposta = cliente_ia.models.generate_content(model='gemini-2.5-flash', contents=prompt)
-        bot.send_message(CHAT_ID, f"🤖 *Análise Gemini:*\n\n{resposta.text}", parse_mode="Markdown")
+        
+        bot.send_message(message.chat.id, f"🤖 *Análise Gemini:*\n\n{resposta.text}", parse_mode="Markdown")
         
     except Exception as e:
-        bot.send_message(CHAT_ID, f"❌ Erro: `{e}`")
+        bot.send_message(message.chat.id, f"❌ Erro: `{e}`")
 
 @bot.message_handler(commands=['bancos'])
 def cmd_bancos(m):
-    if str(m.chat.id) != str(CHAT_ID): return
+    if str(m.chat.id) not in CHAT_IDS: return
     msg = bot.reply_to(m, "Selecione o servidor para buscar backups esquecidos:", reply_markup=gerar_teclado_servidores())
     bot.register_next_step_handler(msg, processar_bancos_ia)
 
@@ -198,7 +252,7 @@ def processar_bancos_ia(message):
     
     if not servidor: return
 
-    bot.send_message(CHAT_ID, f"🔎 Buscando .fbk e .fdb em `{apelido}`...", parse_mode="Markdown", reply_markup=types.ReplyKeyboardRemove())
+    bot.send_message(message.chat.id, f"🔎 Buscando .fbk e .fdb em `{apelido}`...", parse_mode="Markdown", reply_markup=types.ReplyKeyboardRemove())
     
     try:
         ssh = paramiko.SSHClient()
@@ -211,19 +265,19 @@ def processar_bancos_ia(message):
         ssh.close()
 
         if not saida:
-            bot.send_message(CHAT_ID, "✅ Nenhum backup perdido encontrado.")
+            bot.send_message(message.chat.id, "✅ Nenhum backup perdido encontrado.")
             return
 
         prompt = f"Gere comandos rm -f para estes arquivos de banco encontrados em {apelido}: {saida}"
         resposta = cliente_ia.models.generate_content(model='gemini-2.5-flash', contents=prompt)
-        bot.send_message(CHAT_ID, f"🤖 *Sugestão de Limpeza:*\n\n{resposta.text}", parse_mode="Markdown")
+        bot.send_message(message.chat.id, f"🤖 *Sugestão de Limpeza:*\n\n{resposta.text}", parse_mode="Markdown")
         
     except Exception as e:
-        bot.send_message(CHAT_ID, f"❌ Erro: `{e}`")
+        bot.send_message(message.chat.id, f"❌ Erro: `{e}`")
 
 @bot.message_handler(commands=['logs'])
 def cmd_logs(m):
-    if str(m.chat.id) != str(CHAT_ID): return
+    if str(m.chat.id) not in CHAT_IDS: return
     msg = bot.reply_to(m, "Selecione o servidor para ler os logs de manutenção:", reply_markup=gerar_teclado_servidores())
     bot.register_next_step_handler(msg, processar_logs_ia)
 
@@ -234,7 +288,7 @@ def processar_logs_ia(message):
     
     if not servidor: return
 
-    bot.send_message(CHAT_ID, f"🔎 Buscando arquivos `manutencao_banco.txt` em `{apelido}` (últimos 15 dias)...", parse_mode="Markdown", reply_markup=types.ReplyKeyboardRemove())
+    bot.send_message(message.chat.id, f"🔎 Buscando arquivos `manutencao_banco.txt` em `{apelido}` (últimos 15 dias)...", parse_mode="Markdown", reply_markup=types.ReplyKeyboardRemove())
     
     try:
         ssh = paramiko.SSHClient()
@@ -247,7 +301,7 @@ def processar_logs_ia(message):
         arquivos_log = [arq for arq in arquivos_log if arq]
 
         if not arquivos_log:
-            bot.send_message(CHAT_ID, "✅ Nenhum log recente encontrado.")
+            bot.send_message(message.chat.id, "✅ Nenhum log recente encontrado.")
             ssh.close()
             return
 
@@ -264,42 +318,40 @@ def processar_logs_ia(message):
                 Comece com ✅ (Sucesso) ou 🚨 (Erro).
                 """
                 resposta = cliente_ia.models.generate_content(model='gemini-2.5-flash', contents=prompt)
-                bot.send_message(CHAT_ID, f"📄 `{arquivo}`:\n{resposta.text}", parse_mode="Markdown")
+                bot.send_message(message.chat.id, f"📄 `{arquivo}`:\n{resposta.text}", parse_mode="Markdown")
                 time.sleep(15) # Freio para não estourar a cota gratuita do Google (Evita Erro 429)
                 
         ssh.close()
-        bot.send_message(CHAT_ID, f"🏁 Leitura de logs de `{apelido}` finalizada!", parse_mode="Markdown")
+        bot.send_message(message.chat.id, f"🏁 Leitura de logs de `{apelido}` finalizada!", parse_mode="Markdown")
         
     except Exception as e:
-        bot.send_message(CHAT_ID, f"❌ Erro ao ler logs:\n`{e}`", parse_mode="Markdown")
+        bot.send_message(message.chat.id, f"❌ Erro ao ler logs:\n`{e}`", parse_mode="Markdown")
 
 @bot.message_handler(commands=['varredura'])
 def cmd_varredura(m):
     """Comando ninja: Dispara a busca por arquivos perdidos em TODOS os servidores ao mesmo tempo."""
-    if str(m.chat.id) != str(CHAT_ID): return
+    if str(m.chat.id) not in CHAT_IDS: return
     
     bot.reply_to(m, "🚀 Disparando conexões simultâneas... Aguarde o relatório final.")
     
     def orquestrador():
         threads = []
-        resultados_globais = [] # Lista que vai juntar as respostas de todos os servidores
+        resultados_globais = [] 
         
-        # Cria uma thread (trabalhador) para cada servidor na lista
         for s in config_global.get('servidores', []):
             t = threading.Thread(target=buscar_bancos_perdidos_background, args=(s, resultados_globais))
             threads.append(t)
-            t.start() # Solta o trabalhador
+            t.start() 
             
-        # O '.join()' faz o código esperar até o último trabalhador terminar o serviço
         for t in threads:
             t.join()
             
-        # Se algum trabalhador anotou problema na lista, manda mensagem de alerta
+        # Envia a resposta final apenas para quem rodou o comando
         if resultados_globais:
             msg_final = "📊 *Resultado da Varredura:*\n\n" + "\n\n".join(resultados_globais)
-            bot.send_message(CHAT_ID, msg_final, parse_mode="Markdown")
+            bot.send_message(m.chat.id, msg_final, parse_mode="Markdown")
         else:
-            bot.send_message(CHAT_ID, "✅ *Varredura Concluída!* Nenhum arquivo `.fbk` ou `.fdb` perdido foi encontrado nos servidores.", parse_mode="Markdown")
+            bot.send_message(m.chat.id, "✅ *Varredura Concluída!* Nenhum arquivo `.fbk` ou `.fdb` perdido foi encontrado nos servidores.", parse_mode="Markdown")
 
     threading.Thread(target=orquestrador).start()
 
@@ -316,12 +368,11 @@ def buscar_bancos_perdidos_background(servidor, resultados_globais):
         ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         ssh.connect(hostname=servidor['host'], username=servidor['usuario'], password=servidor['senha'], port=servidor.get('porta', 22), timeout=30)
         
-        cmd = f'find {servidor["particao"]} -type f \\( -iname "*.fbk" -o -iname "*copia*.fdb" \\) -exec du -h {{}} + 2>/dev/null | sort -rh | head -n 15'
+        cmd = f'find {servidor["particao"]} -path "*/bkp" -prune -o -type f \\( -iname "*.fbk" -o -iname "*copia*.fdb" -o -iname "*ant*.fdb" -o -iname "*old*.fdb" \\) -exec du -h {{}} + 2>/dev/null | sort -rh | head -n 15'
         _, stdout, _ = ssh.exec_command(cmd)
         saida = stdout.read().decode('utf-8').strip()
         ssh.close()
 
-        # Se achou sujeira, guarda na lista global
         if saida:
             resultados_globais.append(f"⚠️ *{apelido}:*\n```text\n{saida}\n```")
             
@@ -336,15 +387,13 @@ def verificar_json_bancos(servidor):
     so = servidor.get('so', 'linux').lower()
     
     alertas = []
-    
-    if so == 'windows': return alertas # Ignora se for servidor Windows
+    if so == 'windows': return alertas 
         
     try:
         ssh = paramiko.SSHClient()
         ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         ssh.connect(hostname=host, username=servidor['usuario'], password=servidor['senha'], port=servidor.get('porta', 22), timeout=15)
         
-        # Puxa apenas JSONs modificados nos últimos 2 dias
         cmd = "find /data -type f -name 'status_manutencao.json' -mtime -2 -exec cat {} \\; -exec echo '---FIM_JSON---' \\; 2>/dev/null"
             
         _, stdout, _ = ssh.exec_command(cmd)
@@ -353,7 +402,6 @@ def verificar_json_bancos(servidor):
         
         if not saida: return alertas
             
-        # Quebra o texto gigante em blocos usando nosso separador
         blocos = saida.split('---FIM_JSON---')
         
         for bloco in blocos:
@@ -362,9 +410,8 @@ def verificar_json_bancos(servidor):
                 dados = json.loads(bloco.strip())
                 status = dados.get('status', '').upper()
                 
-                # O Pulo do Gato: Só anota se for mensagem de erro!
                 if status in ['ERRO', 'ERRO_CRITICO']:
-                    nome_srv = dados.get('servidor', apelido)
+                    nome_srv = dados.get('cliente_servidor', dados.get('servidor', apelido))
                     banco = dados.get('banco', 'Desconhecido')
                     msg = dados.get('mensagem', 'Sem mensagem')
                     data_att = dados.get('data_atualizacao', 'Sem data')
@@ -376,7 +423,7 @@ def verificar_json_bancos(servidor):
                               f"💬 *Erro:* `{msg}`")
                     alertas.append(alerta)
             except json.JSONDecodeError:
-                continue # Ignora se o arquivo estiver corrompido
+                continue 
                 
     except Exception as e:
         logging.error(f"Erro ao ler JSONs em {apelido}: {e}")
@@ -397,13 +444,10 @@ def rotina_diaria_bancos():
         if alertas_gerais:
             msg_final = "⚠️ *RELATÓRIO DE ERROS NAS REINDEXAÇÕES*\n\n" + "\n\n".join(alertas_gerais)
         else:
-            msg_final = "✅ *Manutenção dos Bancos:* Varredura concluída! Tudo OK hoje, nenhum erro encontrado."
+            msg_final = "✅ *Manutenção dos Bancos:* Varredura concluída! Tudo OK, nenhum erro encontrado."
             
-        try:
-            bot.send_message(CHAT_ID, msg_final, parse_mode="Markdown")
-            logging.info("Relatório de bancos enviado pro Telegram.")
-        except Exception as e:
-            logging.error(f"Erro ao enviar alerta de bancos no Telegram: {e}")
+        enviar_alerta_geral(msg_final, parse_mode="Markdown")
+        logging.info("Relatório de bancos enviado pro Telegram.")
 
 
 # ==============================================================================
@@ -426,14 +470,13 @@ def job_resumo_matinal():
     if alertas: msg += "*Atenção Necessária:*\n" + "\n".join(alertas) + "\n\n"
     if oks: msg += "*Servidores OK:* " + " | ".join(oks)
 
-    if bot: bot.send_message(CHAT_ID, msg, parse_mode="Markdown")
-    enviar_email("Resumo da Infraestrutura", msg.replace('*', '')) # Envia pro e-mail sem asteriscos
+    enviar_alerta_geral(msg, parse_mode="Markdown")
+    enviar_email("Resumo da Infraestrutura", msg.replace('*', '')) 
 
 def job_checagem_hourly():
     """Checagem silenciosa. Só apita no Telegram se o bicho pegar."""
     hora_atual = datetime.now().hour
     
-    # JANELA DE MANUTENÇÃO: De 20h até 4h59 da manhã, ele ignora alarmes falsos de disco cheio.
     if hora_atual >= 20 or hora_atual < 5:
         logging.info(f"Checagem ignorada. O relógio marca {hora_atual}h (Janela de Manutenção).")
         return 
@@ -444,15 +487,11 @@ def job_checagem_hourly():
     alertas = [a for a in alertas if a and "🚨" in a]
     
     if alertas and bot:
-        bot.send_message(CHAT_ID, "⚠️ *Alerta de Rotina:* \n\n" + "\n".join(alertas), parse_mode="Markdown")
+        msg_alerta = "⚠️ *Alerta de Rotina:* \n\n" + "\n".join(alertas)
+        enviar_alerta_geral(msg_alerta, parse_mode="Markdown")
 
 
 def run_scheduler():
-    """
-    O Relógio de Ponto do script. 
-    Usa 'lambda: threading.Thread' para que se um servidor travar (timeout), 
-    ele não atrase o horário das outras funções.
-    """
     schedule.every().day.at("07:00").do(lambda: threading.Thread(target=rotina_diaria_bancos).start())
     schedule.every().day.at("07:15").do(lambda: threading.Thread(target=job_resumo_matinal).start())
     schedule.every(3).hours.do(lambda: threading.Thread(target=job_checagem_hourly).start())
@@ -461,10 +500,7 @@ def run_scheduler():
         schedule.run_pending()
         time.sleep(10)
 
-# O Ponto de Partida! Aqui é onde o arquivo começa a executar quando você clica nele.
 if __name__ == "__main__":
     logging.info("=== Monitor Iniciado com Sucesso ===")
-    # Solta o agendador de horários em segundo plano
     threading.Thread(target=run_scheduler, daemon=True).start()
-    # Põe o Bot para escutar as suas mensagens 24/7
     bot.infinity_polling()
