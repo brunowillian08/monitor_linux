@@ -1,6 +1,6 @@
 # Ignorar arquivos de senhas e configurações reais
 servidores.json
-
+.env
 # Ignorar logs
 monitor_infra.log
 monitor_infra.log.*

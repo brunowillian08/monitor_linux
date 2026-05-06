@@ -2,3 +2,4 @@ paramiko
 pyTelegramBotAPI
 google-genai
 schedule
+python-dotenv
