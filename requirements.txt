@@ -3,3 +3,4 @@ pyTelegramBotAPI
 google-genai
 schedule
 python-dotenv
+google.api_core
