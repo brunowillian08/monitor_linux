@@ -70,7 +70,7 @@ def gerar_conteudo_ia_com_retry(prompt, max_tentativas=3):
     for tentativa in range(max_tentativas):
         try:
             return cliente_ia.models.generate_content(
-                model='gemini-2.0-flash', 
+                model='gemini-3.5-flash', 
                 contents=prompt
             )
         except (exceptions.ServiceUnavailable, exceptions.InternalServerError):
