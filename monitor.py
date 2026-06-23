@@ -147,7 +147,7 @@ def verificar_disco(servidor):
         partes = saida.split()
         if len(partes) >= 5:
             uso = int(partes[-2].replace('%', ''))
-            if uso >= servidor['limite_percentual']:
+            if uso > servidor['limite_percentual']:
                 return f"🚨 *{servidor['apelido']}*: {uso}% de uso (Limite {servidor['limite_percentual']}%)"
         return None
     finally:
@@ -373,7 +373,7 @@ def rotina_diaria_bancos():
     alertas = []
     for s in config_global.get('servidores', []):
         alertas.extend(verificar_json_bancos(s))
-    msg = "⚠️ *RELATÓRIO DE ERROS*\n\n" + "\n\n".join(alertas) if alertas else "✅ *Tudo OK nos bancos.*"
+    msg = "⚠️ *RELATÓRIO DE ERROS*\n\n" + "\n\n".join(alertas) if alertas else "✅ *Sem erros de reindexações.*"
     enviar_alerta_geral(msg, parse_mode="Markdown")
 
 # ==============================================================================
@@ -385,11 +385,11 @@ def job_resumo_matinal():
     for s in config_global.get('servidores', []):
         res = verificar_disco(s)
         alertas.append(res) if res else oks.append(f"✅ {s['apelido']}")
-    msg = f"🌅 *Resumo Infra - {datetime.now().strftime('%d/%m')}*\n\n"
+    msg = f"🌅 *Resumo - {datetime.now().strftime('%d/%m')}*\n\n"
     if alertas: msg += "*Atenção:* " + "\n".join(alertas) + "\n\n"
     msg += "*Servidores OK:* " + " | ".join(oks)
     enviar_alerta_geral(msg, parse_mode="Markdown")
-    enviar_email("Resumo Infra", msg.replace('*', ''))
+    enviar_email("Resumo ", msg.replace('*', ''))
 
 def job_checagem_hourly():
     if 20 <= datetime.now().hour < 5: return
