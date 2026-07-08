@@ -51,7 +51,7 @@ def carregar_configuracao():
 
 config_global = carregar_configuracao()
 
-# SEGURANÇA: Gestão de Segredos via Variáveis de Ambiente [cite: 161, 163]
+# SEGURANÇA: Gestão de Segredos via Variáveis de Ambiente
 TOKEN = os.getenv('TELEGRAM_TOKEN') or config_global.get('config_telegram', {}).get('token')
 GEMINI_KEY = os.getenv('GEMINI_API_KEY') or config_global.get('config_ia', {}).get('gemini_api_key')
 
@@ -66,7 +66,7 @@ cliente_ia = genai.Client(api_key=GEMINI_KEY) if GEMINI_KEY else None
 # ==============================================================================
 
 def gerar_conteudo_ia_com_retry(prompt, max_tentativas=3):
-    """Executa a chamada à IA com lógica de retentativa para erros 503 e 429[cite: 109, 187]."""
+    """Executa a chamada à IA com lógica de retentativa para erros 503 e 429."""
     for tentativa in range(max_tentativas):
         try:
             return cliente_ia.models.generate_content(
@@ -86,7 +86,7 @@ def gerar_conteudo_ia_com_retry(prompt, max_tentativas=3):
     return None
 
 def conectar_ssh(servidor, timeout=20):
-    """Centraliza a conexão SSH com tratamento de erros profissional[cite: 166, 168]."""
+    """Centraliza a conexão SSH com tratamento de erros profissional."""
     try:
         ssh = paramiko.SSHClient()
         ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
@@ -196,7 +196,7 @@ def processar_analise_ia(message):
         return
 
     try:
-        # SEGURANÇA: Blindagem de Bancos na Origem [cite: 126, 164, 165, 196]
+        # SEGURANÇA: Blindagem de Bancos na Origem
         pastas_ignorar = servidor.get('ignorar_pastas', [])
         pastas_ignorar.append("*/bkp*")
         
@@ -216,7 +216,7 @@ def processar_analise_ia(message):
             bot.send_message(message.chat.id, "✅ Nada crítico para limpar encontrado.")
             return
 
-        # SEGURANÇA: Instruções de Segurança no Prompt [cite: 168, 169]
+        # SEGURANÇA: Instruções de Segurança no Prompt
         prompt = f"""
         [REGRA CRÍTICA: SEGURANÇA OPERACIONAL]
         Analise os arquivos pesados abaixo. 
@@ -277,7 +277,7 @@ def cmd_logs(m):
     bot.register_next_step_handler(msg, processar_logs_ia)
 
 def processar_logs_ia(message):
-    """Versão Otimizada com Batching para evitar limites de API[cite: 15, 145]."""
+    """Versão Otimizada com Batching para evitar limites de API."""
     apelido = message.text
     servidor = next((s for s in config_global.get('servidores', []) if s['apelido'] == apelido), None)
     if not servidor: return
@@ -328,9 +328,159 @@ def cmd_varredura(m):
 
     threading.Thread(target=orquestrador).start()
 
+@bot.message_handler(commands=['auditoria'])
+def cmd_auditoria(m):
+    if str(m.chat.id) not in CHAT_IDS: return
+    
+    # Armazenamos o ID exato de quem enviou o comando
+    chat_solicitante = m.chat.id
+    
+    bot.reply_to(
+        m, 
+        "🕵️‍♂️ <b>Iniciando varredura contra possiveis vazamento de dados...</b>\n"
+        "Conectando simultaneamente nas bases. Os relatórios individuais chegarão assim que cada servidor responder.",
+        parse_mode='HTML'
+    )
+    
+    def orquestrador_seguranca():
+        threads = []
+        resultados_suspeitos = []
+        checklist_bancos = []
+        
+        for s in config_global.get('servidores', []):
+            if s.get('ignorar_auditoria') is True: continue
+            t = threading.Thread(
+                target=auditoria_vazamento_background, 
+                # PASSAMOS APENAS O CHAT DE QUEM PEDIU AQUI
+                args=(s, resultados_suspeitos, checklist_bancos, chat_solicitante)
+            )
+            threads.append(t)
+            t.start()
+            
+        for t in threads:
+            t.join()
+            
+        resumo_cobertura = "\n".join(checklist_bancos)
+        
+        msg_final = "🏁 <b>Varredura Concluída!</b>\n\n"
+        if resultados_suspeitos:
+            msg_final += f"⚠️ Alertas críticos detalhados individualmente acima.\n\n📊 <b>Status da Infraestrutura:</b>\n{resumo_cobertura}"
+        else:
+            msg_final += f"✅ Nenhum acesso fora do horário comercial encontrado em nenhuma das bases.\n\n📊 <b>Status da Infraestrutura:</b>\n{resumo_cobertura}"
+            
+        # Responde apenas para quem pediu
+        bot.send_message(chat_solicitante, msg_final, parse_mode='HTML')
+
+    threading.Thread(target=orquestrador_seguranca).start()
 # ==============================================================================
 # CAPÍTULO 4: TAREFAS DE SEGUNDO PLANO
 # ==============================================================================
+
+
+def formatar_linha_auditoria(usuario, data_str, hora_str):
+    """Auxiliar Senior: Limpa e padroniza as strings para caberem na tabela."""
+    user_clean = usuario.replace("@", "")[:12]
+    hora_clean = hora_str.split(".")[0] # Remove os milissegundos (.0000)
+    
+    # Tenta encurtar a data de 2026-06-11 para 11/06 para economizar espaço horizontal
+    try:
+        if "-" in data_str:
+            dt = datetime.strptime(data_str, "%Y-%m-%d")
+            data_clean = dt.strftime("%d/%m")
+        else:
+            data_clean = data_str[:5]
+    except:
+        data_clean = data_str[:5]
+
+    return user_clean, data_clean, hora_clean
+
+def auditoria_vazamento_background(servidor, resultados_suspeitos, checklist_bancos, chat_id):
+    """
+    Versão Forense Cirúrgica Corrigida: Sem agrupamentos, com segundos 100% reais e disparo imediato por servidor.
+    """
+    apelido = servidor['apelido']
+    
+    import unicodedata
+    apelido_sem_acentos = "".join(c for c in unicodedata.normalize('NFD', apelido) if unicodedata.category(c) != 'Mn')
+    id_limpo = "".join([c for c in apelido_sem_acentos if c.isalnum()]).lower()
+    data_corte = (datetime.now() - timedelta(days=2)).strftime('%d.%m.%Y')
+    
+    try:
+        logging.info(f"[AUDITORIA] Conectando para varredura: {apelido}")
+        
+        ssh = conectar_ssh(servidor)
+        if not ssh:
+            checklist_bancos.append(f"❌ {apelido}: Falha de Conexão SSH")
+            return
+            
+        caminho_banco = servidor.get('caminho_banco_fdb') 
+        if not caminho_banco:
+            checklist_bancos.append(f"⚠️ {apelido}: Ignorado (Caminho FDB não configurado)")
+            ssh.close()
+            return
+
+        NOME_CONTAINER_PADRAO = "manutencao_fb5"
+
+        cmd_exec = (
+            f"DIR_BANCO=$(dirname {caminho_banco}); "
+            f"CP_BANCO=\"$DIR_BANCO/audito_{id_limpo}.fdb\"; "
+            f"cp {caminho_banco} \"$CP_BANCO\" && "
+            f"chmod 777 \"$CP_BANCO\" && "
+            f"if docker exec {NOME_CONTAINER_PADRAO} [ -x /usr/local/firebird/bin/isql ]; then ISQL_INTERNAL='/usr/local/firebird/bin/isql'; "
+            f"elif docker exec {NOME_CONTAINER_PADRAO} [ -x /opt/firebird/bin/isql ]; then ISQL_INTERNAL='/opt/firebird/bin/isql'; "
+            f"else ISQL_INTERNAL=$(docker exec {NOME_CONTAINER_PADRAO} which isql 2>/dev/null || echo 'isql'); fi; "
+            f'echo "SET HEADING OFF; '
+            f"SELECT 'USUARIO:' || CAST(s.LOGIN AS VARCHAR(50)) || ' | DATA:' || CAST(ld.DATA AS VARCHAR(30)) || ' | HORA:' || CAST(ld.HORA AS VARCHAR(30)) "
+            f"FROM LOG_DB ld "
+            f"INNER JOIN SENHA s ON s.CPF = ld.CPF AND s.LOGIN LIKE '@%' "
+            f"WHERE ld.acao = 'ENTROU' "
+            f"  AND ld.DATA >= '{data_corte}' "
+            f"  AND (ld.HORA >= '17:45:00' OR ld.HORA <= '08:00:00');\" | "
+            f"docker exec -i {NOME_CONTAINER_PADRAO} $ISQL_INTERNAL -user FSCSCPI8 -password scpi \"$CP_BANCO\" 2>&1; "
+            f"rm -f \"$CP_BANCO\""
+        )
+                   
+        _, stdout, _ = ssh.exec_command(cmd_exec)
+        saida = stdout.read().decode('utf-8', errors='ignore').strip()
+        ssh.close()
+        
+        logging.info(f"[AUDITORIA RAW OUTPUT {apelido}]:\n{saida}")
+        
+        linhas_validas = [ln.strip() for ln in saida.split('\n') if 'USUARIO:' in ln]
+        checklist_bancos.append(f"🔹 {apelido}: Auditado com Sucesso")
+        
+        # CORRIGIDO: Variável renomeada corretamente para 'linhas_validas' evitando NameError
+        if linhas_validas:
+            # Constrói o grid monoespaçado exclusivo para este servidor
+            tabela = f"🚨 <b>CONTA para analisar em {apelido.upper()}</b>\n"
+            tabela += f"<pre>{'USUÁRIO':<15} | {'DATA':<10} | {'HORA':<8}\n"
+            tabela += f"{'-'*15}-+-{'-'*10}-+-{'-'*8}\n"
+            
+            for linha in linhas_validas:
+                try:
+                    partes = linha.split(" | ")
+                    user = partes[0].split(":")[1].strip().replace("@", "")[:15]
+                    data_log = partes[1].split(":")[1].strip()
+                    
+                    # MELHORIA SÊNIOR: Remove a palavra 'HORA:' e corta os milissegundos (.0000)
+                    # Mantendo o formato exato com os segundos intactos: 07:47:39
+                    hora_bruta = partes[2].replace("HORA:", "").strip()
+                    hora_log = hora_bruta.split(".")[0]
+                    
+                    tabela += f"{user:<15} | {data_log:<10} | {hora_log:<8}\n"
+                except Exception as ex:
+                    # Fallback de segurança forense para não perder a linha crua caso falhe
+                    tabela += f"{linha[:38]}\n"
+                    
+            tabela += "</pre>"
+            
+            # Dispara imediatamente a mensagem isolada deste servidor para o Telegram!
+            bot.send_message(chat_id, tabela, parse_mode='HTML')
+            resultados_suspeitos.append(tabela)
+            
+    except Exception as e:
+        logging.error(f"Erro crítico na auditoria de {apelido}: {e}")
+        checklist_bancos.append(f"❌ {apelido}: Erro de Execução ({str(e)[:30]})")
 
 def buscar_bancos_perdidos_background(servidor, resultados):
     ssh = conectar_ssh(servidor)
@@ -396,10 +546,72 @@ def job_checagem_hourly():
     alertas = [verificar_disco(s) for s in config_global.get('servidores', []) if verificar_disco(s)]
     if alertas: enviar_alerta_geral("⚠️ *Alerta:* \n" + "\n".join(alertas), parse_mode="Markdown")
 
+def rotina_automatizada_auditoria():
+    """
+    Rotina Automatizada: Executa a varredura e envia os resultados para TODOS os administradores.
+    """
+    logging.info("[AGENDADOR] Iniciando varredura automatizada de auditoria para toda a equipe...")
+    
+    # Envia o aviso de início para todos os administradores cadastrados
+    for id_adm in CHAT_IDS:
+        try:
+            bot.send_message(
+                int(id_adm), 
+                "⏰ <b>[AGENDADOR] Iniciando varredura ...</b>\nBases sendo auditadas em background.",
+                parse_mode='HTML'
+            )
+        except Exception as e:
+            logging.error(f"Falha ao avisar administrador {id_adm}: {e}")
+
+    def orquestrador_seguranca_automatizado():
+        threads = []
+        resultados_suspeitos = []
+        checklist_bancos = []
+        
+        # Como o envio em tempo real por servidor dentro da thread enviaria apenas para um ID fixo,
+        # para o agendador vamos fazer com que as threads guardem os resultados na lista global
+        # e no final nós disparamos o consolidado para todos os administradores de uma vez só, 
+        # evitando fazer spam de mensagens individuais de cada servidor para todo mundo.
+        
+        for s in config_global.get('servidores', []):
+            if s.get('ignorar_auditoria') is True: continue
+            
+            # Criamos uma função lambda rápida para envelopar o envio para todos
+            t = threading.Thread(
+                target=auditoria_vazamento_background_agendador, 
+                args=(s, resultados_suspeitos, checklist_bancos)
+            )
+            threads.append(t)
+            t.start()
+            
+        for t in threads:
+            t.join()
+            
+        resumo_cobertura = "\n".join(checklist_bancos)
+        
+        # Monta o blocão final do agendador para enviar para a equipe inteira
+        if resultados_suspeitos:
+            msg_final = "🚨 <b>[AGENDADOR] Alerta Máximo de Acessos Suspeitos!</b>\n\n"
+            msg_final += "\n\n".join(resultados_suspeitos)
+            msg_final += f"\n\n📊 <b>Status da Infraestrutura:</b>\n{resumo_cobertura}"
+        else:
+            msg_final = "✅ <b>[AGENDADOR] Relatório de Rotina Concluído</b>\nNenhum acesso suspeito detectado.\n\n"
+            msg_final += f"📊 <b>Status da Infraestrutura:</b>\n{resumo_cobertura}"
+            
+        # Dispara para todos os administradores cadastrados no sistema
+        for id_adm in CHAT_IDS:
+            try:
+                bot.send_message(int(id_adm), msg_final, parse_mode='HTML')
+            except Exception as e:
+                logging.error(f"Falha ao enviar relatório final para {id_adm}: {e}")
+
+    threading.Thread(target=orquestrador_seguranca_automatizado).start()
+
 def run_scheduler():
     schedule.every().day.at("07:00").do(lambda: threading.Thread(target=rotina_diaria_bancos).start())
     schedule.every().day.at("07:15").do(lambda: threading.Thread(target=job_resumo_matinal).start())
     schedule.every(3).hours.do(lambda: threading.Thread(target=job_checagem_hourly).start())
+    schedule.every().day.at("08:30").do(rotina_automatizada_auditoria)
     while True:
         schedule.run_pending()
         time.sleep(10)
